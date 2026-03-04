@@ -12,6 +12,12 @@ PgsToSrtPlus decodes PGS subtitle bitmaps, preprocesses and splits them into ind
 
 The result is an SRT file with accurate text and `<i>` markup.
 
+## Why PaddleOCR? 
+
+PaddleOCR generally outperforms Tesseract in terms of accuracy, particularly on complex, low-quality, and scene-text documents.
+
+PaddleOCR also has a wider dictionary than Tesseract, and will properly recognize non-ASCII characters that sometimes appear in subtitles, such as music notes (♪ ♫ ♬).
+
 ## Supported Languages
 
 - **English** (`en`) — default
