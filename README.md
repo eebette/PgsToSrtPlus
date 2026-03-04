@@ -1,6 +1,6 @@
 # PgsToSrtPlus
 
-Extract PGS (Blu-ray) subtitles from MKV files and convert them to SRT using OCR.
+Extract PGS (Blu-ray) subtitles from MKV files and convert them to SRT using PaddleOCR and Ollama VLMs.
 
 ## How It Works
 
