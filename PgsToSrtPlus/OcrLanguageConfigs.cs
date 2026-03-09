@@ -34,7 +34,7 @@ static class OcrLanguageConfigs
                     SKFontStyleSlant.Upright))
             ?? SKTypeface.Default);
     }
-    
+
     static readonly SrtPostProcessor.Step[] DefaultPostProcessingSteps =
     [
         SrtPostProcessor.StandardizeMusicGlyph,
@@ -76,6 +76,7 @@ static class OcrLanguageConfigs
         MidProcessingSteps:
         [
             OcrMidProcessor.StripItalicTags,
+            OcrMidProcessor.FixMissingWordBreaks,
             OcrMidProcessor.NormalizeSpacing,
             OcrMidProcessor.NormalizeUnicodeEllipsis,
             OcrMidProcessor.FixDotSpacing,

@@ -21,6 +21,7 @@ static class Program
                 paddleModelOption,
                 deviceOption,
                 paddleAcceptanceThresholdOption,
+                italicThresholdOption,
                 debugOption,
                 debugDirOption
                 ) =
@@ -38,6 +39,7 @@ static class Program
             paddleModelOption,
             deviceOption,
             paddleAcceptanceThresholdOption,
+            italicThresholdOption,
             debugOption,
             debugDirOption
         };
@@ -61,6 +63,7 @@ static class Program
             var paddleModel = parseResult.GetValue(paddleModelOption)!;
             var device = parseResult.GetValue(deviceOption)!;
             var paddleAcceptanceThreshold = parseResult.GetValue(paddleAcceptanceThresholdOption);
+            var italicThreshold = parseResult.GetValue(italicThresholdOption);
             var language = parseResult.GetValue(languageOption)!;
 
             Directory.CreateDirectory(outDir);
@@ -87,6 +90,7 @@ static class Program
                 paddleModel,
                 device,
                 paddleAcceptanceThreshold,
+                italicThreshold,
                 language
             );
         });
@@ -250,7 +254,7 @@ static class Program
                         http,
                         ollamaUrl,
                         model,
-                        paddle.Recognize,
+                        paddle,
                         debugDir != null,
                         debugDir,
                         debugDir != null ? $"{idx:D5}_L{li}" : null,
@@ -280,6 +284,7 @@ static class Program
         string paddleModel = "PP-OCRv5_server_rec",
         string paddleDevice = "gpu",
         double paddleVerifyThreshold = 1.0,
+        double italicThreshold = 3.0,
         string language = "en")
     {
         // Step 1: decode, preprocess, and split every subtitle into line images.
@@ -288,7 +293,8 @@ static class Program
         // Step 2: Start PaddleOCR worker
         string script = PaddleOcrWorker.FindScript();
 
-        PaddleOcrWorker paddle = PaddleOcrWorker.Start(paddlePython, script, paddleModel, paddleDevice);
+        PaddleOcrWorker paddle = PaddleOcrWorker.Start(
+            paddlePython, script, paddleModel, paddleDevice, italicThreshold, debugDir);
 
         using var _ = paddle; // disposed at end of method
 

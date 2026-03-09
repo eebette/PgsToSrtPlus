@@ -81,6 +81,18 @@ static class OcrMidProcessor
     }
 
     /// <summary>
+    /// Insert a space when a lowercase letter is immediately followed by an
+    /// uppercase letter, fixing missing word breaks from OCR.
+    ///   "WolfDoctor" → "Wolf Doctor"
+    ///   "youDon't"   → "you Don't"
+    /// Does not affect all-caps runs ("USA"), digits, or non-ASCII characters.
+    /// </summary>
+    public static string FixMissingWordBreaks(string text)
+    {
+        return Regex.Replace(text, @"(?<=[a-z])(?=[A-Z])", " ");
+    }
+
+    /// <summary>
     /// Collapse space(s) after a leading ellipsis: "... word" → "...word".
     /// Also handles ellipsis after a bracketed term: "[Name] ... word" → "[Name] ...word".
     /// Runs after the period rule so the two cannot interfere.

@@ -729,8 +729,8 @@ static class SrtPostProcessor
     [SuppressMessage("ReSharper", "InvalidXmlDocComment")]
     static string AddSpacesAroundGlyphs(string text)
     {
-        // After glyph: add space unless already followed by space, newline, or glyph.
-        text = Regex.Replace(text, $@"([{GlyphClass}])(?=[^ \n{GlyphClass}])", "$1 ");
+        // After glyph: add space unless already followed by space, newline, glyph, or '<' (HTML tag).
+        text = Regex.Replace(text, $@"([{GlyphClass}])(?=[^ \n<{GlyphClass}])", "$1 ");
         // Before glyph: add space unless already preceded by space, newline, glyph, '>', or '-'.
         // '>' is excluded because it is the end of an HTML tag — not a visible character.
         // '-' is excluded so that speaker-change dashes ("-♪") are not split into "- ♪".

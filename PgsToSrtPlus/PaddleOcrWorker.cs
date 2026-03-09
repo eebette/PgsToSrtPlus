@@ -3,12 +3,18 @@ using System.Text.Json;
 
 namespace PgsToSrtPlus;
 
+record ItalicAngleResult(double Angle, bool IsItalic);
+
+/// <summary>A horizontal pixel span [Start, End) from projection-profile word segmentation.</summary>
+record WordBoundary(int Start, int End);
+
 /// <summary>
-/// Manages a persistent PaddleOCR Python subprocess for text recognition.
+/// Manages a persistent PaddleOCR Python subprocess for text recognition,
+/// segment detection, and shear-based italic detection.
 ///
-/// The subprocess (paddle_ocr_bridge.py) loads the OCR model once at startup,
-/// then handles per-image recognition requests over a newline-delimited JSON
-/// stdin/stdout protocol — avoiding per-image process start overhead.
+/// The subprocess (paddle_ocr_bridge.py) loads the OCR models once at startup,
+/// then handles per-image requests over a newline-delimited JSON stdin/stdout
+/// protocol — avoiding per-image process start overhead.
 /// </summary>
 sealed class PaddleOcrWorker : IDisposable
 {
@@ -17,23 +23,22 @@ sealed class PaddleOcrWorker : IDisposable
 
     PaddleOcrWorker(Process proc) => _proc = proc;
 
-    // ── Factory ────────────────────────────────────────────────────────────────
+    // -- Factory ---------------------------------------------------------------
 
     /// <summary>
     /// Starts the Python bridge subprocess and waits for it to signal ready.
-    /// Returns null (with a logged error) if the process cannot start or the
-    /// model fails to load.
     /// </summary>
     public static PaddleOcrWorker Start(
         string pythonPath,
         string scriptPath,
         string modelName = "PP-OCRv5_server_rec",
-        string device = "gpu")
+        string device = "gpu",
+        double italicThreshold = 3.0,
+        string? debugDir = null)
     {
-
         Console.WriteLine(
             $"Starting PaddleOCR worker  model={modelName}  device={device}…");
-        
+
         if (!File.Exists(scriptPath))
         {
             throw new FileNotFoundException("PaddleOCR script not found.", scriptPath);
@@ -65,11 +70,14 @@ sealed class PaddleOcrWorker : IDisposable
 
         try
         {
-            // Send startup config as the first line.
             proc.StandardInput.WriteLine(
-                JsonSerializer.Serialize(new { model_name = modelName, device }));
+                JsonSerializer.Serialize(new
+                {
+                    model_name = modelName,
+                    device,
+                    italic_threshold = italicThreshold,
+                }));
 
-            // Wait for {"ready":true} or {"error":"..."}.
             string? ready = proc.StandardOutput.ReadLine();
             if (ready == null)
             {
@@ -85,7 +93,7 @@ sealed class PaddleOcrWorker : IDisposable
                 proc.Dispose();
                 throw new InvalidOperationException($"PaddleOCR init error: {err.GetString()}");
             }
-            
+
             Console.WriteLine("PaddleOCR worker ready.");
 
             return new PaddleOcrWorker(proc);
@@ -106,14 +114,11 @@ sealed class PaddleOcrWorker : IDisposable
         }
     }
 
-    // Recognition
-
     /// <summary>
-    /// Writes <paramref name="pngBytes"/> to a temporary file, sends the path
-    /// to the worker process, and returns the recognised text and confidence score.
-    /// Thread-safe. Returns (null, 0) on any failure.
+    /// Sends an image to the recognition-only model (no detection).
+    /// Used for VLM fallback path where detection is not needed.
     /// </summary>
-    public (string? Text, double Score) Recognize(byte[] pngBytes)
+    public (string? Text, double Score) RecognizeOnly(byte[] pngBytes)
     {
         string tmp = Path.GetTempFileName() + ".png";
         try
@@ -123,7 +128,7 @@ sealed class PaddleOcrWorker : IDisposable
             lock (_lock)
             {
                 _proc.StandardInput.WriteLine(
-                    JsonSerializer.Serialize(new { image = tmp }));
+                    JsonSerializer.Serialize(new { image = tmp, recognize_only = true }));
 
                 string? response = _proc.StandardOutput.ReadLine();
                 if (response == null)
@@ -150,19 +155,122 @@ sealed class PaddleOcrWorker : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"  [warn] PaddleOCR recognize failed: {ex.Message}");
+            Console.WriteLine($"  [warn] PaddleOCR recognize-only failed: {ex.Message}");
             return (null, 0);
         }
         finally
         {
-            try
+            try { File.Delete(tmp); } catch { /* ignored */ }
+        }
+    }
+
+    // -- Italic angle detection ------------------------------------------------
+
+    /// <summary>
+    /// Sends a cropped image to the Python bridge for shear-projection-variance
+    /// italic angle detection.
+    /// </summary>
+    public ItalicAngleResult DetectItalicAngle(byte[] pngBytes)
+    {
+        string tmp = Path.GetTempFileName() + ".png";
+        try
+        {
+            File.WriteAllBytes(tmp, pngBytes);
+
+            lock (_lock)
             {
-                File.Delete(tmp);
+                _proc.StandardInput.WriteLine(
+                    JsonSerializer.Serialize(new { italic_detect = tmp }));
+
+                string? response = _proc.StandardOutput.ReadLine();
+                if (response == null)
+                {
+                    Console.WriteLine("  [warn] PaddleOCR worker closed unexpectedly.");
+                    return new ItalicAngleResult(0, false);
+                }
+
+                using var doc = JsonDocument.Parse(response);
+                if (doc.RootElement.TryGetProperty("error", out var err))
+                {
+                    Console.WriteLine($"  [warn] Italic detection error: {err.GetString()}");
+                    return new ItalicAngleResult(0, false);
+                }
+
+                double angle = doc.RootElement.TryGetProperty("angle", out var angleEl)
+                    ? angleEl.GetDouble()
+                    : 0.0;
+                bool isItalic = doc.RootElement.TryGetProperty("is_italic", out var italicEl)
+                    && italicEl.GetBoolean();
+                return new ItalicAngleResult(angle, isItalic);
             }
-            catch
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  [warn] Italic detection failed: {ex.Message}");
+            return new ItalicAngleResult(0, false);
+        }
+        finally
+        {
+            try { File.Delete(tmp); } catch { /* ignored */ }
+        }
+    }
+
+    // -- Projection-profile word segmentation -----------------------------------
+
+    /// <summary>
+    /// Sends an image to the Python bridge for projection-profile word
+    /// segmentation.  Returns horizontal pixel spans [Start, End) for each
+    /// contiguous run of ink columns.
+    /// </summary>
+    public WordBoundary[] WordSegment(byte[] pngBytes)
+    {
+        string tmp = Path.GetTempFileName() + ".png";
+        try
+        {
+            File.WriteAllBytes(tmp, pngBytes);
+
+            lock (_lock)
             {
-                // ignored
+                _proc.StandardInput.WriteLine(
+                    JsonSerializer.Serialize(new { word_segment = tmp }));
+
+                string? response = _proc.StandardOutput.ReadLine();
+                if (response == null)
+                {
+                    Console.WriteLine("  [warn] PaddleOCR worker closed unexpectedly.");
+                    return [];
+                }
+
+                using var doc = JsonDocument.Parse(response);
+                if (doc.RootElement.TryGetProperty("error", out var err))
+                {
+                    Console.WriteLine($"  [warn] Word segment error: {err.GetString()}");
+                    return [];
+                }
+
+                if (!doc.RootElement.TryGetProperty("words", out var wordsEl)
+                    || wordsEl.ValueKind != JsonValueKind.Array)
+                    return [];
+
+                var words = new List<WordBoundary>();
+                foreach (var w in wordsEl.EnumerateArray())
+                {
+                    var items = w.EnumerateArray().ToArray();
+                    if (items.Length >= 2)
+                        words.Add(new WordBoundary(items[0].GetInt32(), items[1].GetInt32()));
+                }
+
+                return words.ToArray();
             }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  [warn] Word segment failed: {ex.Message}");
+            return [];
+        }
+        finally
+        {
+            try { File.Delete(tmp); } catch { /* ignored */ }
         }
     }
 
@@ -171,18 +279,16 @@ sealed class PaddleOcrWorker : IDisposable
     /// <summary>
     /// Looks for paddle_ocr_bridge.py alongside the binary, in ancestor
     /// directories of the binary (to find the repo root), and in the current
-    /// working directory. Returns null if not found.
+    /// working directory.
     /// </summary>
     public static string FindScript(string name = "paddle_ocr_bridge.py")
     {
-        // Check alongside the binary and in the working directory first.
         var candidates = new List<string>
         {
             Path.Combine(AppContext.BaseDirectory, name),
             Path.Combine(Directory.GetCurrentDirectory(), name)
         };
 
-        // Walk up from the binary directory (e.g. bin/Debug/net9.0 → repo root).
         var dir = Directory.GetParent(AppContext.BaseDirectory);
         while (dir != null)
         {
@@ -191,7 +297,7 @@ sealed class PaddleOcrWorker : IDisposable
         }
 
         var scriptFile = candidates.Find(File.Exists);
-        
+
         if (scriptFile == null)
         {
             throw new InvalidOperationException(

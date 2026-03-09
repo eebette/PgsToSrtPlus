@@ -13,6 +13,7 @@ record CliOptions(
     Option<string> PaddleModelOption,
     Option<string> DeviceOption,
     Option<double> PaddleAcceptanceThresholdOption,
+    Option<double> ItalicThresholdOption,
     Option<bool> Debug,
     Option<string> DebugDir
 );
@@ -62,7 +63,7 @@ static class CliOptionFactory
 
         var ollamaModelOption = new Option<string>("--model")
         {
-            Description = "Ollama model for OCR on low-confidence lines and italics recognition",
+            Description = "Ollama model for VLM fallback OCR on low-confidence lines",
             Required = false,
             DefaultValueFactory = _ => "qwen3-vl:32b-instruct"
         };
@@ -102,6 +103,19 @@ static class CliOptionFactory
                 result.AddError("Value must be between 0.0 and 1.0");
         });
 
+        var italicThresholdOption = new Option<double>("--italic-threshold")
+        {
+            Description = "Shear angle (degrees) above which text is classified as italic",
+            Required = false,
+            DefaultValueFactory = _ => 3.0
+        };
+        italicThresholdOption.Validators.Add(result =>
+        {
+            var val = result.GetValueOrDefault<double>();
+            if (val < 0.0 || val > 45.0)
+                result.AddError("Value must be between 0.0 and 45.0");
+        });
+
         var languageOption = new Option<string>("--language", "-l")
         {
             Description = "Language of the subtitle track to select",
@@ -121,6 +135,7 @@ static class CliOptionFactory
             paddleModelOption,
             deviceOption,
             paddleAcceptanceThresholdOption,
+            italicThresholdOption,
             debugOption,
             debugDirOption
         );
