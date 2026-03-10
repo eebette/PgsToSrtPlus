@@ -805,7 +805,7 @@ static partial class OcrEngine
     ///      c. Shear italic detection on tag crop and body crop separately.
     ///   4. Otherwise, shear italic detection on the full line.
     /// </summary>
-    public static string? OcrImage(
+    public static (string? Text, bool VlmText) OcrImage(
         byte[] pngBytes,
         HttpClient http,
         string ollamaUrl,
@@ -841,7 +841,7 @@ static partial class OcrEngine
                 $"  [dbg] {debugPrefix}  step1-ocr  {scoreInfo}  image={bmp?.Width}x{bmp?.Height}");
         }
 
-        if (string.IsNullOrWhiteSpace(plainText)) return null;
+        if (string.IsNullOrWhiteSpace(plainText)) return (null, paddleFallback);
 
         // Step 2: Mid-processing.
         plainText = OcrMidProcessor.Process(plainText, language);
@@ -901,10 +901,10 @@ static partial class OcrEngine
             if (debug ?? false)
                 Console.WriteLine($"  [dbg] {debugPrefix}  vlm-fallback={vlmReason}");
 
-            return RunVlmItalicFallback(
+            return (RunVlmItalicFallback(
                 plainText, pngBytes, paddleFallback, ocrPrompt,
                 http, ollamaUrl, model, language, langConfig,
-                debug, debugDir, debugPrefix);
+                debug, debugDir, debugPrefix), true);
         }
 
         // ── Normal path: shear italic detection ──────────────────────────────
@@ -933,18 +933,18 @@ static partial class OcrEngine
                 if (debug ?? false)
                 {
                     Console.WriteLine(
-                        $"  [dbg] {debugPrefix}  italic-tag  angle={tagItalicResult.Angle:F1}  italic={tagItalicResult.IsItalic}");
+                        $"  [dbg] {debugPrefix}  italic-tag  angle={tagItalicResult.Angle:F1}  ratio={tagItalicResult.PeakRatio:F2}  italic={tagItalicResult.IsItalic}");
                     Console.WriteLine(
-                        $"  [dbg] {debugPrefix}  italic-body  angle={bodyItalicResult.Angle:F1}  italic={bodyItalicResult.IsItalic}");
+                        $"  [dbg] {debugPrefix}  italic-body  angle={bodyItalicResult.Angle:F1}  ratio={bodyItalicResult.PeakRatio:F2}  italic={bodyItalicResult.IsItalic}");
                 }
 
                 if (tagItalicResult.IsItalic && bodyItalicResult.IsItalic)
-                    return $"<i>{plainText.TrimEnd()}</i>";
+                    return ($"<i>{plainText.TrimEnd()}</i>", paddleFallback);
                 if (bodyItalicResult.IsItalic)
-                    return $"{plainText[..bodyStart]}<i>{plainText[bodyStart..].TrimEnd()}</i>";
+                    return ($"{plainText[..bodyStart]}<i>{plainText[bodyStart..].TrimEnd()}</i>", paddleFallback);
                 if (tagItalicResult.IsItalic)
-                    return $"<i>{plainText[..tagLen]}</i>{plainText[tagLen..].TrimEnd()}";
-                return plainText;
+                    return ($"<i>{plainText[..tagLen]}</i>{plainText[tagLen..].TrimEnd()}", paddleFallback);
+                return (plainText, paddleFallback);
             }
         }
 
@@ -953,8 +953,8 @@ static partial class OcrEngine
 
         if (debug ?? false)
             Console.WriteLine(
-                $"  [dbg] {debugPrefix}  italic-detect  angle={italicResult.Angle:F1}  italic={italicResult.IsItalic}");
+                $"  [dbg] {debugPrefix}  italic-detect  angle={italicResult.Angle:F1}  ratio={italicResult.PeakRatio:F2}  italic={italicResult.IsItalic}");
 
-        return italicResult.IsItalic ? $"<i>{plainText.TrimEnd()}</i>" : plainText;
+        return (italicResult.IsItalic ? $"<i>{plainText.TrimEnd()}</i>" : plainText, paddleFallback);
     }
 }

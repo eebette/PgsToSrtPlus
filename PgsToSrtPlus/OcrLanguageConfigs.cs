@@ -76,6 +76,7 @@ static class OcrLanguageConfigs
         MidProcessingSteps:
         [
             OcrMidProcessor.StripItalicTags,
+            OcrMidProcessor.NormalizeApostrophes,
             OcrMidProcessor.FixMissingWordBreaks,
             OcrMidProcessor.NormalizeSpacing,
             OcrMidProcessor.NormalizeUnicodeEllipsis,

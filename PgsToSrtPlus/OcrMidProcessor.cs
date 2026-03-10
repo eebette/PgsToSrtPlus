@@ -103,6 +103,30 @@ static class OcrMidProcessor
         return Regex.Replace(text, @"(?:^|(?<=\] ))\.\.\.\ +", "...");
     }
 
+    /// <summary>
+    /// Normalize curly/smart apostrophes to straight ASCII, then collapse
+    /// spaces around apostrophes in contractions and trailing elisions.
+    ///   "Don ' t"        → "Don't"
+    ///   "it ' s"         → "it's"
+    ///   "comin ' for"    → "comin' for"
+    ///   "they ' ve"      → "they've"
+    /// Must run before NormalizeSpacing (which would space out non-ASCII curly quotes).
+    /// </summary>
+    public static string NormalizeApostrophes(string text)
+    {
+        // Step 1: smart quotes → straight apostrophe
+        text = text.Replace('\u2018', '\'').Replace('\u2019', '\'');
+
+        // Step 2: contractions — word ' suffix → word'suffix
+        text = Regex.Replace(text, @"(\w) ' (s|t|m|d)\b", "$1'$2");
+        text = Regex.Replace(text, @"(\w) ' (ll|ve|re)\b", "$1'$2");
+
+        // Step 3: trailing elision — word ' before space/punctuation/end → word'
+        text = Regex.Replace(text, @"(\w) '(?=[\s,;:!?.]|$)", "$1'");
+
+        return text;
+    }
+
     public static string Process(string text, string language)
     {
         foreach (var step in OcrLanguageConfigs.ForLanguage(language).MidProcessingSteps)

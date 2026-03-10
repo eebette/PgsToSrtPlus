@@ -111,30 +111,40 @@ static class Program
         var result = new List<DisplaySet>();
         long? previousStart = null;
         BluRaySupParser.PcsData? previousDisplaySet = null;
+        int visible = 0, clear = 0, mergedRle = 0, mergedPixel = 0;
 
         foreach (var currentDisplaySet in displaySets)
         {
             bool currentIsDisplay = currentDisplaySet.PcsObjects.Count > 0 && currentDisplaySet.BitmapObjects.Count > 0;
             long currentStartTimeInMs = currentDisplaySet.StartTime / 90;
 
-            // If this display set is visually rendered, add previous display set to return collection with this 
-            // display set's start time as its end time if previous display set is not null, then set this display set
-            // as the previous display set for next iteration 
             if (currentIsDisplay)
             {
+                visible++;
                 if (previousDisplaySet != null)
+                {
+                    var matchKind = BitmapMatchKind(previousDisplaySet, currentDisplaySet);
+                    if (matchKind != MatchKind.None)
+                    {
+                        if (matchKind == MatchKind.ExactRle) mergedRle++;
+                        else mergedPixel++;
+                        continue; // Same bitmap — extend previous entry's duration
+                    }
+
                     result.Add(new DisplaySet(previousDisplaySet, previousStart!.Value, currentStartTimeInMs));
+                }
                 previousStart = currentStartTimeInMs;
                 previousDisplaySet = currentDisplaySet;
             }
-            // If this display set is not visually rendered, add previous display set to return collection with this 
-            // display set's start time as its end time if previous display set is not null, then set the previous
-            // display set as null for next iteration
-            else if (previousDisplaySet != null)
+            else
             {
-                result.Add(new DisplaySet(previousDisplaySet, previousStart!.Value, currentStartTimeInMs));
-                previousDisplaySet = null;
-                previousStart = null;
+                clear++;
+                if (previousDisplaySet != null)
+                {
+                    result.Add(new DisplaySet(previousDisplaySet, previousStart!.Value, currentStartTimeInMs));
+                    previousDisplaySet = null;
+                    previousStart = null;
+                }
             }
         }
 
@@ -142,7 +152,107 @@ static class Program
         if (previousDisplaySet != null)
             result.Add(new DisplaySet(previousDisplaySet, previousStart!.Value, previousStart.Value + 5000));
 
+        // Show last PCS timestamp so we can verify the parser read the full file.
+        if (displaySets.Count > 0)
+        {
+            long lastMs = displaySets[^1].StartTime / 90;
+            var lastTs = TimeSpan.FromMilliseconds(lastMs);
+            Console.WriteLine(
+                $"  PCS stats: {visible} visible, {clear} clear  |  " +
+                $"merged: {mergedRle} exact-RLE + {mergedPixel} pixel  |  " +
+                $"last PCS @ {lastTs:hh\\:mm\\:ss}");
+        }
+
         return result.ToArray();
+    }
+
+    enum MatchKind { None, ExactRle, Pixel }
+
+    /// <summary>
+    /// Returns the kind of bitmap match between two PCS display sets, or None.
+    /// Fast path: exact RLE match (same dimensions and byte-identical data).
+    /// Slow path: for bitmaps within ±2px dimensions, decodes both and compares
+    /// alpha channels pixel-by-pixel at the common resolution, requiring ≥99.5%
+    /// of pixels to match within tolerance.
+    /// </summary>
+    static MatchKind BitmapMatchKind(BluRaySupParser.PcsData a, BluRaySupParser.PcsData b)
+    {
+        if (a.PcsObjects.Count != b.PcsObjects.Count || a.PcsObjects.Count == 0)
+            return MatchKind.None;
+
+        var aObj = a.PcsObjects[0];
+        var bObj = b.PcsObjects[0];
+
+        if (aObj.Origin.X != bObj.Origin.X || aObj.Origin.Y != bObj.Origin.Y)
+            return MatchKind.None;
+
+        if (aObj.ObjectId >= a.BitmapObjects.Count || bObj.ObjectId >= b.BitmapObjects.Count)
+            return MatchKind.None;
+
+        var aBmps = a.BitmapObjects[aObj.ObjectId];
+        var bBmps = b.BitmapObjects[bObj.ObjectId];
+
+        if (aBmps.Count == 0 || bBmps.Count == 0)
+            return MatchKind.None;
+
+        var aOds = aBmps[0];
+        var bOds = bBmps[0];
+
+        // Fast path: exact RLE match
+        if (aOds.Size.Width == bOds.Size.Width && aOds.Size.Height == bOds.Size.Height &&
+            aOds.Fragment.ImageBuffer.AsSpan().SequenceEqual(bOds.Fragment.ImageBuffer.AsSpan()))
+            return MatchKind.ExactRle;
+
+        // Dimensions must be within ±2px for fuzzy comparison
+        if (Math.Abs(aOds.Size.Width - bOds.Size.Width) > 2 ||
+            Math.Abs(aOds.Size.Height - bOds.Size.Height) > 2)
+            return MatchKind.None;
+
+        // Slow path: decode both and compare alpha channels at full resolution
+        using var aBmp = PgsDecoder.DecodePgsImage(a);
+        using var bBmp = PgsDecoder.DecodePgsImage(b);
+        if (aBmp == null || bBmp == null)
+            return MatchKind.None;
+
+        return AlphaMatch(aBmp, bBmp) ? MatchKind.Pixel : MatchKind.None;
+    }
+
+    /// <summary>
+    /// Compares two decoded BGRA bitmaps by their alpha channels at the common
+    /// (minimum) resolution. Returns true when ≥99.5% of pixels match within
+    /// a tolerance of ±16. This catches re-rasterized duplicates that differ
+    /// by ±1–2px in dimensions while rejecting genuinely different subtitles.
+    /// </summary>
+    static unsafe bool AlphaMatch(SKBitmap a, SKBitmap b)
+    {
+        int w = Math.Min(a.Width, b.Width);
+        int h = Math.Min(a.Height, b.Height);
+        if (w == 0 || h == 0) return false;
+
+        int bppA = a.BytesPerPixel, bppB = b.BytesPerPixel;
+        int strideA = a.RowBytes, strideB = b.RowBytes;
+        byte* pA = (byte*)a.GetPixels(), pB = (byte*)b.GetPixels();
+
+        // Alpha is byte 3 in both BGRA and RGBA
+        const int alphaOff = 3;
+        const int tolerance = 16;
+
+        int mismatches = 0;
+        int total = w * h;
+
+        for (int y = 0; y < h; y++)
+        {
+            byte* rowA = pA + y * strideA;
+            byte* rowB = pB + y * strideB;
+            for (int x = 0; x < w; x++)
+            {
+                int diff = rowA[x * bppA + alphaOff] - rowB[x * bppB + alphaOff];
+                if (diff > tolerance || diff < -tolerance)
+                    mismatches++;
+            }
+        }
+
+        return mismatches <= total * 0.005; // 99.5% match
     }
 
     // Decode + preprocess
@@ -245,10 +355,11 @@ static class Program
         {
             var (idx, startMs, endMs, linePngs) = subtitleData[i];
             var lineTexts = new List<string>(linePngs.Count);
+            var vlmLines = new bool[linePngs.Count];
 
             for (int li = 0; li < linePngs.Count; li++)
             {
-                var text =
+                var (text, vlm) =
                     OcrEngine.OcrImage(
                         linePngs[li],
                         http,
@@ -261,10 +372,11 @@ static class Program
                         paddleVerifyThreshold, language
                     );
                 lineTexts.Add(text ?? "");
+                vlmLines[li] = vlm;
             }
 
             string joined = string.Join("\n", lineTexts);
-            srtEntries[i] = new SrtEntry(idx, startMs, endMs, joined);
+            srtEntries[i] = new SrtEntry(idx, startMs, endMs, joined, vlmLines);
             Console.WriteLine($"  [{i + 1}/{subtitleData.Count}] #{idx}  {joined}");
         }
 
@@ -451,6 +563,6 @@ static class Program
 
 record DisplaySet(BluRaySupParser.PcsData Ds, long StartMs, long EndMs);
 
-record SrtEntry(int Index, long StartMs, long EndMs, string Text);
+record SrtEntry(int Index, long StartMs, long EndMs, string Text, bool[]? VlmLines = null);
 
 record SubtitleData(int Index, long StartMs, long EndMs, List<byte[]> LinePngs);

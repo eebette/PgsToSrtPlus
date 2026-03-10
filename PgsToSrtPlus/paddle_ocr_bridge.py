@@ -72,14 +72,36 @@ def _shear_projection_variance(img_gray, angle_deg, pad):
 
 
 def _detect_italic_angle(img_gray, angle_range=(-20, 20), steps=81):
-    """Sweep shear angles and return the one with peak projection variance."""
+    """Sweep shear angles and return (pos_angle, pos_ratio).
+
+    Only the best *positive* angle is returned, since Latin italic text always
+    leans right (positive in this convention).  Negative peaks — caused by
+    left-leaning diagonal strokes in characters like W, V, M — are ignored.
+
+    pos_ratio = variance(pos_angle) / variance(0°).  For true italic text all
+    strokes lean at the same angle, so the ratio is high (>1.2).  For upright
+    text where a right-leaning character (V) creates a modest positive peak,
+    the ratio stays close to 1.
+    """
     h, _ = img_gray.shape
     max_angle = max(abs(angle_range[0]), abs(angle_range[1]))
     pad = int(np.tan(np.radians(max_angle)) * max(h - 1, 0)) + 1
     angles = np.linspace(angle_range[0], angle_range[1], steps)
-    variances = [_shear_projection_variance(img_gray, a, pad) for a in angles]
-    best_angle = float(angles[np.argmax(variances)])
-    return best_angle
+    variances = np.array([_shear_projection_variance(img_gray, a, pad) for a in angles])
+
+    zero_idx = int(np.argmin(np.abs(angles)))
+    var_at_zero = float(variances[zero_idx])
+
+    # Best angle in the positive range only (rightward lean = italic).
+    pos_mask = angles > 0
+    if not pos_mask.any():
+        return 0.0, 1.0
+    pos_variances = np.where(pos_mask, variances, -np.inf)
+    pos_best_idx = int(np.argmax(pos_variances))
+    pos_angle = float(angles[pos_best_idx])
+    pos_ratio = float(variances[pos_best_idx]) / var_at_zero if var_at_zero > 0 else float("inf")
+
+    return pos_angle, pos_ratio
 
 
 def _binarize(img_gray, threshold=128):
@@ -92,11 +114,20 @@ def _binarize(img_gray, threshold=128):
     return ((img_gray < threshold) * 255).astype(np.uint8)
 
 
-def _classify_italic(img_gray, threshold):
-    """Return (is_italic, angle) for a grayscale text image."""
+def _classify_italic(img_gray, threshold, peak_ratio_min=1.2):
+    """Return (is_italic, angle, peak_ratio) for a grayscale text image.
+
+    Both conditions must hold for italic classification:
+      1. angle > threshold  (positive = rightward lean, matching Latin italic;
+         negative angles from diagonal characters like W/V/M are rejected)
+      2. peak_ratio > peak_ratio_min  (safety net: the peak must be meaningfully
+         stronger than the 0° baseline, rejecting upright text where a single
+         right-leaning character like V creates a modest positive peak)
+    """
     binary = _binarize(img_gray)
-    angle = _detect_italic_angle(binary)
-    return abs(angle) > threshold, angle
+    angle, peak_ratio = _detect_italic_angle(binary)
+    is_italic = angle > threshold and peak_ratio > peak_ratio_min
+    return is_italic, angle, peak_ratio
 
 
 # -- Text extraction helpers (for recognition-only fallback) -------------------
@@ -246,9 +277,10 @@ def main() -> None:
                 from PIL import Image
                 img = Image.open(image_path).convert("L")
                 img_gray = np.array(img)
-                is_italic, angle = _classify_italic(img_gray, italic_threshold)
+                is_italic, angle, peak_ratio = _classify_italic(img_gray, italic_threshold)
                 print(json.dumps({
                     "angle": round(angle, 2),
+                    "peak_ratio": round(peak_ratio, 2),
                     "is_italic": is_italic,
                 }), flush=True)
             except Exception as exc:

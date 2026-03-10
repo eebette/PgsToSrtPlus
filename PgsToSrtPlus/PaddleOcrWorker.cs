@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace PgsToSrtPlus;
 
-record ItalicAngleResult(double Angle, bool IsItalic);
+record ItalicAngleResult(double Angle, double PeakRatio, bool IsItalic);
 
 /// <summary>A horizontal pixel span [Start, End) from projection-profile word segmentation.</summary>
 record WordBoundary(int Start, int End);
@@ -186,28 +186,31 @@ sealed class PaddleOcrWorker : IDisposable
                 if (response == null)
                 {
                     Console.WriteLine("  [warn] PaddleOCR worker closed unexpectedly.");
-                    return new ItalicAngleResult(0, false);
+                    return new ItalicAngleResult(0, 0, false);
                 }
 
                 using var doc = JsonDocument.Parse(response);
                 if (doc.RootElement.TryGetProperty("error", out var err))
                 {
                     Console.WriteLine($"  [warn] Italic detection error: {err.GetString()}");
-                    return new ItalicAngleResult(0, false);
+                    return new ItalicAngleResult(0, 0, false);
                 }
 
                 double angle = doc.RootElement.TryGetProperty("angle", out var angleEl)
                     ? angleEl.GetDouble()
                     : 0.0;
+                double peakRatio = doc.RootElement.TryGetProperty("peak_ratio", out var ratioEl)
+                    ? ratioEl.GetDouble()
+                    : 0.0;
                 bool isItalic = doc.RootElement.TryGetProperty("is_italic", out var italicEl)
                     && italicEl.GetBoolean();
-                return new ItalicAngleResult(angle, isItalic);
+                return new ItalicAngleResult(angle, peakRatio, isItalic);
             }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"  [warn] Italic detection failed: {ex.Message}");
-            return new ItalicAngleResult(0, false);
+            return new ItalicAngleResult(0, 0, false);
         }
         finally
         {

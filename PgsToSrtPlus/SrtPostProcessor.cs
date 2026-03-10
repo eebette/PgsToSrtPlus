@@ -87,10 +87,20 @@ static class SrtPostProcessor
         var counts = new Dictionary<char, int>(MusicGlyphs.Length);
         foreach (char g in MusicGlyphs) counts[g] = 0;
 
+        // Count only glyphs from PaddleOCR lines — VLM is unreliable for
+        // distinguishing ♪ vs ♫ and would pollute the dominance calculation.
         foreach (var e in entries)
-        foreach (char c in e.Text)
-            if (counts.ContainsKey(c))
-                counts[c]++;
+        {
+            string[] lines = e.Text.Split('\n');
+            for (int li = 0; li < lines.Length; li++)
+            {
+                if (e.VlmLines != null && li < e.VlmLines.Length && e.VlmLines[li])
+                    continue; // skip VLM-produced line
+                foreach (char c in lines[li])
+                    if (counts.ContainsKey(c))
+                        counts[c]++;
+            }
+        }
 
         int total = counts.Values.Sum();
         if (total == 0) return entries;
@@ -103,7 +113,16 @@ static class SrtPostProcessor
                 break;
             }
 
-        if (dominant == '\0') return entries;
+        if (dominant == '\0')
+        {
+            string dist = string.Join(", ",
+                counts.Where(kv => kv.Value > 0)
+                    .OrderByDescending(kv => kv.Value)
+                    .Select(kv => $"'{kv.Key}'={kv.Value}"));
+            Console.WriteLine(
+                $"[post] music-glyph: no dominant glyph (>60%) — {dist}  total={total}. Skipping.");
+            return entries;
+        }
 
         Console.WriteLine(
             $"[post] music-glyph: dominant '{dominant}' ({counts[dominant]}/{total} = " +
@@ -374,8 +393,12 @@ static class SrtPostProcessor
     ///   ♪ text         →  <i>♪ text</i>
     ///   text ♪         →  <i>text ♪</i>
     /// </summary>
-    static string TransformNotesInside(string line) =>
-        "<i>" + StripTags(line) + "</i>";
+    static string TransformNotesInside(string line)
+    {
+        string s = StripTags(line);
+        var (prefix, rest) = SplitSpeakerTag(s);
+        return prefix + "<i>" + rest + "</i>";
+    }
 
     /// <summary>
     /// Moves notes outside the italic span.
@@ -389,27 +412,28 @@ static class SrtPostProcessor
     static string TransformNotesOutside(string line)
     {
         string s = StripTags(line);
+        var (speakerPrefix, rest) = SplitSpeakerTag(s);
 
         // Advance past leading glyphs, spaces, and speaker-change dashes so that
         // a prefix like "-♪ " is kept outside the italic span as a unit.
         int contentStart = 0;
-        while (contentStart < s.Length
-               && (IsMusicGlyph(s[contentStart]) || s[contentStart] == ' ' || s[contentStart] == '-'))
+        while (contentStart < rest.Length
+               && (IsMusicGlyph(rest[contentStart]) || rest[contentStart] == ' ' || rest[contentStart] == '-'))
             contentStart++;
 
         // Retreat past trailing glyphs and any immediately adjacent spaces.
-        int contentEnd = s.Length;
+        int contentEnd = rest.Length;
         while (contentEnd > contentStart
-               && (IsMusicGlyph(s[contentEnd - 1]) || s[contentEnd - 1] == ' '))
+               && (IsMusicGlyph(rest[contentEnd - 1]) || rest[contentEnd - 1] == ' '))
             contentEnd--;
 
         if (contentStart >= contentEnd) return line; // only glyphs — nothing to wrap
 
-        string leading = s[..contentStart];
-        string content = s[contentStart..contentEnd];
-        string trailing = s[contentEnd..];
+        string leading = rest[..contentStart];
+        string content = rest[contentStart..contentEnd];
+        string trailing = rest[contentEnd..];
 
-        return leading + "<i>" + content + "</i>" + trailing;
+        return speakerPrefix + leading + "<i>" + content + "</i>" + trailing;
     }
 
     // ── Rule 4: Standardize italic style of lyric content ─────────────────────
@@ -537,6 +561,28 @@ static class SrtPostProcessor
     // ── Lyric-block helpers ────────────────────────────────────────────────────
 
     /// <summary>
+    /// Splits off a leading speaker tag like "GROUP: " from a tag-stripped line.
+    /// Returns (prefix, rest) where prefix includes the colon and trailing space.
+    /// </summary>
+    static (string Prefix, string Body) SplitSpeakerTag(string line)
+    {
+        int i = 0;
+        while (i < line.Length && char.IsWhiteSpace(line[i])) i++;
+        if (i < line.Length && char.IsUpper(line[i]))
+        {
+            int start = i;
+            while (i < line.Length && (char.IsUpper(line[i]) || char.IsDigit(line[i]))) i++;
+            if (i > start && i < line.Length && line[i] == ':')
+            {
+                i++; // past colon
+                while (i < line.Length && line[i] == ' ') i++;
+                return (line[..i], line[i..]);
+            }
+        }
+        return ("", line);
+    }
+
+    /// <summary>
     /// Tries to form a complete lyric block starting at <paramref name="lines"/>[i].
     /// Returns (line1, line2_or_null, lines_consumed) or null if no block starts here.
     /// </summary>
@@ -562,7 +608,7 @@ static class SrtPostProcessor
 
     /// <summary>
     /// Returns true if the first non-tag, non-whitespace character in the line
-    /// is a music-note glyph.
+    /// is a music-note glyph.  Skips past leading speaker tags like "GROUP:".
     /// </summary>
     static bool HasLeadingGlyph(string line)
     {
@@ -582,6 +628,19 @@ static class SrtPostProcessor
             {
                 i++;
                 continue;
+            }
+
+            // Skip leading speaker tags like "GROUP:" or "PHINEAS:"
+            if (char.IsUpper(line[i]))
+            {
+                int j = i;
+                while (j < line.Length && (char.IsUpper(line[j]) || char.IsDigit(line[j])))
+                    j++;
+                if (j > i && j < line.Length && line[j] == ':')
+                {
+                    i = j + 1;
+                    continue;
+                }
             }
 
             return IsMusicGlyph(line[i]);
