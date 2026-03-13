@@ -131,7 +131,8 @@ static class Program
                         continue; // Same bitmap — extend previous entry's duration
                     }
 
-                    result.Add(new DisplaySet(previousDisplaySet, previousStart!.Value, currentStartTimeInMs));
+                    long previousEndTimeInMs = previousDisplaySet.EndTime / 90;
+                    result.Add(new DisplaySet(previousDisplaySet, previousStart!.Value, previousEndTimeInMs));
                 }
                 previousStart = currentStartTimeInMs;
                 previousDisplaySet = currentDisplaySet;
@@ -148,9 +149,14 @@ static class Program
             }
         }
 
-        // Final display set rendering (5000 ms display time)
+        // Final display set rendering — use PGS EndTime, fall back to 5000 ms
         if (previousDisplaySet != null)
-            result.Add(new DisplaySet(previousDisplaySet, previousStart!.Value, previousStart.Value + 5000));
+        {
+            long endMs = previousDisplaySet.EndTime > 0
+                ? previousDisplaySet.EndTime / 90
+                : previousStart!.Value + 5000;
+            result.Add(new DisplaySet(previousDisplaySet, previousStart!.Value, endMs));
+        }
 
         // Show last PCS timestamp so we can verify the parser read the full file.
         if (displaySets.Count > 0)

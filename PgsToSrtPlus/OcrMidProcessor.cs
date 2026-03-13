@@ -117,7 +117,7 @@ static class OcrMidProcessor
         // Step 1: smart quotes → straight apostrophe
         text = text.Replace('\u2018', '\'').Replace('\u2019', '\'');
 
-        // Step 2: contractions — word ' suffix → word'suffix
+        // Step 2: contractions — word ' suffix → suffixation
         text = Regex.Replace(text, @"(\w) ' (s|t|m|d)\b", "$1'$2");
         text = Regex.Replace(text, @"(\w) ' (ll|ve|re)\b", "$1'$2");
 

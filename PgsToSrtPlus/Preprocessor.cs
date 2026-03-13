@@ -55,13 +55,13 @@ static class Preprocessor
 
         /// <summary>
         /// Gaussian blur sigma applied to the binary fill mask to produce antialiased edges.
-        /// 0.5 gives a 2-pixel soft edge — enough to smooth PGS outline artefacts without
+        /// 0.5 gives a 2-pixel soft edge — enough to smooth PGS outline artifacts without
         /// making text look noticeably blurry.
         /// </summary>
         public float BlurSigma => 0.5f;
     }
 
-    // Target heights for scale normalisation.
+    // Target heights for scale normalization.
     // Thresholds are tuned for Blu-ray PGS at ~60 px/line native height.
     const int BucketSmall  = 80;   // crop h <  90 → 80  (single line, ~60 px native)
     const int BucketMedium = 96;   // crop h < 140 → 96  (tall / two short lines)
@@ -585,7 +585,7 @@ static class Preprocessor
                 for (int row = 0; row < lineH; row++)
                     Buffer.MemoryCopy(src + (cropY0 + row) * w + cropX0, dst + row * lineW, lineW, lineW);
 
-                // Blank outer margin rows so closely-spaced neighbouring lines
+                // Blank outer margin rows so closely-spaced neighboring lines
                 // don't bleed into this line's padding.  Keep a small buffer
                 // around the content edges to preserve descenders / ascenders.
                 int guardPx  = Math.Max(2, contentH / 8);
