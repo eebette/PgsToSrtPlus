@@ -81,7 +81,8 @@ static class OcrLanguageConfigs
             OcrMidProcessor.NormalizeSpacing,
             OcrMidProcessor.NormalizeUnicodeEllipsis,
             OcrMidProcessor.FixDotSpacing,
-            OcrMidProcessor.CollapseSpaceAfterLeadingEllipsis
+            OcrMidProcessor.CollapseSpaceAfterLeadingEllipsis,
+            OcrMidProcessor.FixQuoteSpacing
         ],
         PostProcessingSteps: DefaultPostProcessingSteps
     );

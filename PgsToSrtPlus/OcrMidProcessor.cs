@@ -104,6 +104,31 @@ static class OcrMidProcessor
     }
 
     /// <summary>
+    /// Strip stray whitespace adjacent to quotation marks.
+    ///   "Go right ahead. " → "Go right ahead."
+    ///   " Hello world"     → "Hello world"
+    ///
+    /// Straight ASCII <c>"</c> is ambiguous (open vs. close), so it is only
+    /// adjusted at the start or end of the input — where its role is clear
+    /// from position. The mid-processor runs per OCR'd physical line, so
+    /// "end of input" corresponds to "end of line" in the final SRT entry.
+    /// Curly quotes (U+201C opening, U+201D closing) are unambiguous and
+    /// adjusted wherever they appear.
+    ///
+    /// Must run after <see cref="NormalizeSpacing"/>, which inserts spaces
+    /// around any non-ASCII non-letter/digit character — including curly
+    /// quotes — and could otherwise re-introduce the very gap this step removes.
+    /// </summary>
+    public static string FixQuoteSpacing(string text)
+    {
+        text = Regex.Replace(text, @"\s+([""”])\s*$", "$1");
+        text = Regex.Replace(text, @"^\s*([""“])\s+", "$1");
+        text = Regex.Replace(text, @"\s+(”)", "$1");
+        text = Regex.Replace(text, @"(“)\s+", "$1");
+        return text;
+    }
+
+    /// <summary>
     /// Normalize curly/smart apostrophes to straight ASCII, then collapse
     /// spaces around apostrophes in contractions and trailing elisions.
     ///   "Don ' t"        → "Don't"
